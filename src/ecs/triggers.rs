@@ -713,26 +713,38 @@ fn give_away_focus(
         return;
     }
     let display_center = viewport.center().x;
-    let closest = active_strip
+    let neighbour = active_strip
         .all_columns()
         .into_iter()
+        .filter(|&candidate| candidate != entity)
         .filter_map(|candidate| {
-            if candidate == entity {
-                return None;
-            }
             let center = windows.moving_frame(candidate)?.center().x;
             let distance = (center - display_center).abs();
             Some((candidate, distance))
         })
-        .min_by_key(|(_, dist)| *dist);
+        .min_by_key(|(_, dist)| *dist)
+        .map(|(e, _)| e)
+        .or_else(|| {
+            // Fallback when no candidate has a usable frame: pick any other
+            // column in the strip. Without this, losing focus on the only
+            // geometrically-known window would leave FocusedMarker unset and
+            // silently break keybindings.
+            active_strip
+                .all_columns()
+                .into_iter()
+                .find(|&candidate| candidate != entity)
+        });
 
-    if let Some((neighbour, _)) = closest
-        && let Some(window) = windows.get(neighbour)
+    if let Some(neighbour) = neighbour
+        && windows.get(neighbour).is_some()
     {
-        let window_id = window.id();
-
         config.set_ffm_flag(None);
-        commands.trigger(WMEventTrigger(Event::WindowFocused { window_id }));
+        // Use focus_entity instead of triggering Event::WindowFocused: the
+        // OS has usually handed focus to a different app after the current
+        // window closed/hid, so window_focused_trigger's frontmost/focused
+        // guards would reject a fabricated event. focus_entity calls the
+        // AX API to raise the neighbour and inserts FocusedMarker directly.
+        focus_entity(neighbour, true, commands);
         reshuffle_around(neighbour, commands);
     }
 }
