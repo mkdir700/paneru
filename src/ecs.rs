@@ -182,6 +182,7 @@ pub fn register_triggers(app: &mut bevy::app::App) {
         .add_observer(focus::dim_remove_window_trigger)
         .add_observer(focus::dim_window_trigger)
         .add_observer(focus::maintain_focus_singleton)
+        .add_observer(focus::remember_stack_focus)
         .add_observer(focus::virtual_strip_activated)
         .add_observer(focus::focus_window_trigger)
         .add_observer(workspace::cleanup_active_workspace_marker)

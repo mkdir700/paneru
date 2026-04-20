@@ -1,3 +1,4 @@
+use bevy::ecs::change_detection::DetectChangesMut as _;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::lifecycle::{Add, Remove};
 use bevy::ecs::observer::On;
@@ -47,6 +48,24 @@ pub(super) fn maintain_focus_singleton(
         config.set_skip_reshuffle(false);
     }
     config.set_ffm_flag(None);
+}
+
+/// Records the last-focused entity inside each `Stack`, so east/west
+/// navigation can return to the window the user was previously on.
+/// Uses `bypass_change_detection` because this memory is purely informational
+/// for navigation — it must not trigger a relayout of the strip.
+#[allow(clippy::needless_pass_by_value)]
+#[instrument(level = Level::DEBUG, skip_all, fields(trigger))]
+pub(super) fn remember_stack_focus(
+    trigger: On<Add, FocusedMarker>,
+    mut strips: Query<&mut LayoutStrip>,
+) {
+    let focused_entity = trigger.event().entity;
+    for mut strip in &mut strips {
+        if strip.bypass_change_detection().remember_stack_focus(focused_entity) {
+            break;
+        }
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)]

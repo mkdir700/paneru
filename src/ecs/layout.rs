@@ -54,13 +54,60 @@ impl StackItem {
     }
 }
 
+/// A vertical stack of items with persisted "last focused" memory.
+///
+/// `last_focused` lets directional navigation (east/west) restore focus to the
+/// window that was last active within the stack, instead of mirroring the
+/// source column's vertical slot.
+#[derive(Clone, Debug)]
+pub struct Stack {
+    pub items: Vec<StackItem>,
+    pub last_focused: Option<Entity>,
+}
+
+impl Stack {
+    pub fn contains(&self, entity: Entity) -> bool {
+        self.items.iter().any(|item| item.contains(entity))
+    }
+
+    pub fn position_of(&self, entity: Entity) -> Option<usize> {
+        self.items.iter().position(|item| item.contains(entity))
+    }
+
+    pub fn top(&self) -> Option<Entity> {
+        self.items.first().and_then(StackItem::top)
+    }
+
+    /// Returns `last_focused` if it still resolves to an item in this stack;
+    /// otherwise returns the entity at `index` (or the last item when out of range).
+    pub fn remembered_or_at(&self, index: usize) -> Option<Entity> {
+        if let Some(focus) = self.last_focused
+            && self.contains(focus)
+        {
+            return Some(focus);
+        }
+        self.items
+            .get(index)
+            .or_else(|| self.items.last())
+            .and_then(StackItem::top)
+    }
+
+    /// Clears `last_focused` if it points at the given entity. Called when the
+    /// remembered window is leaving this stack (removal, unstack, tab rotation).
+    pub fn forget_if(&mut self, entity: Entity) {
+        if self.last_focused == Some(entity) {
+            self.last_focused = None;
+        }
+    }
+}
+
 /// Represents a single panel within a `LayoutStrip`, which can either hold a single window, a stack of items, or a group of tabs.
 #[derive(Clone, Debug)]
 pub enum Column {
     /// A panel containing a single window, identified by its `Entity`.
     Single(Entity),
     /// A panel containing a stack of items (windows or tabs), ordered from top to bottom.
-    Stack(Vec<StackItem>),
+    Stack(Stack),
     /// A panel containing a group of native tabs, with the active "Leader" at the front.
     Tabs(Vec<Entity>),
     Fullscren(Entity),
@@ -73,19 +120,7 @@ impl Column {
     pub fn top(&self) -> Option<Entity> {
         match self {
             Column::Single(id) | Column::Fullscren(id) => Some(*id),
-            Column::Stack(stack) => stack.first().and_then(StackItem::top),
-            Column::Tabs(tabs) => tabs.first().copied(),
-        }
-    }
-
-    /// Returns the entity at the given index, or the last entity if the index exceeds the size.
-    pub fn at_or_last(&self, index: usize) -> Option<Entity> {
-        match self {
-            Column::Single(id) | Column::Fullscren(id) => Some(*id),
-            Column::Stack(stack) => stack
-                .get(index)
-                .or_else(|| stack.last())
-                .and_then(StackItem::top),
+            Column::Stack(stack) => stack.top(),
             Column::Tabs(tabs) => tabs.first().copied(),
         }
     }
@@ -94,7 +129,7 @@ impl Column {
     pub fn position_of(&self, entity: Entity) -> Option<usize> {
         match self {
             Column::Single(id) | Column::Fullscren(id) => (*id == entity).then_some(0),
-            Column::Stack(stack) => stack.iter().position(|item| item.contains(entity)),
+            Column::Stack(stack) => stack.position_of(entity),
             Column::Tabs(tabs) => tabs.contains(&entity).then_some(0),
         }
     }
@@ -105,8 +140,10 @@ impl Column {
         match self {
             Column::Single(_) | Column::Fullscren(_) => {}
             Column::Stack(stack) => {
-                if let Some(StackItem::Tabs(tabs)) =
-                    stack.iter_mut().find(|item| item.contains(entity))
+                if let Some(StackItem::Tabs(tabs)) = stack
+                    .items
+                    .iter_mut()
+                    .find(|item| item.contains(entity))
                     && let Some(pos) = tabs.iter().position(|&e| e == entity)
                 {
                     tabs.swap(0, pos);
@@ -164,7 +201,7 @@ impl LayoutStrip {
             .iter()
             .position(|column| match column {
                 Column::Single(id) | Column::Fullscren(id) => *id == entity,
-                Column::Stack(stack) => stack.iter().any(|item| item.contains(entity)),
+                Column::Stack(stack) => stack.contains(entity),
                 Column::Tabs(stack) => stack.contains(&entity),
             })
             .ok_or(Error::NotFound(format!(
@@ -177,7 +214,7 @@ impl LayoutStrip {
     pub fn contains(&self, entity: Entity) -> bool {
         self.columns.iter().any(|column| match column {
             Column::Single(id) | Column::Fullscren(id) => *id == entity,
-            Column::Stack(stack) => stack.iter().any(|item| item.contains(entity)),
+            Column::Stack(stack) => stack.contains(entity),
             Column::Tabs(stack) => stack.contains(&entity),
         })
     }
@@ -215,12 +252,12 @@ impl LayoutStrip {
             Column::Single(id) | Column::Fullscren(id) => {
                 self.columns.insert(index, Column::Tabs(vec![id, follower]));
             }
-            Column::Stack(mut items) => {
-                if let Some(pos) = items.iter().position(|item| item.contains(leader)) {
-                    match &mut items[pos] {
+            Column::Stack(mut stack) => {
+                if let Some(pos) = stack.items.iter().position(|item| item.contains(leader)) {
+                    match &mut stack.items[pos] {
                         StackItem::Single(id) => {
                             let id = *id;
-                            items[pos] = StackItem::Tabs(vec![id, follower]);
+                            stack.items[pos] = StackItem::Tabs(vec![id, follower]);
                         }
                         StackItem::Tabs(tabs) => {
                             if !tabs.contains(&follower) {
@@ -229,7 +266,7 @@ impl LayoutStrip {
                         }
                     }
                 }
-                self.columns.insert(index, Column::Stack(items));
+                self.columns.insert(index, Column::Stack(stack));
             }
             Column::Tabs(mut tabs) => {
                 if !tabs.contains(&follower) {
@@ -260,7 +297,8 @@ impl LayoutStrip {
                     // Already removed from self.columns.
                 }
                 Column::Stack(mut stack) => {
-                    for item in &mut stack {
+                    stack.forget_if(entity);
+                    for item in &mut stack.items {
                         match item {
                             StackItem::Single(_) => {}
                             StackItem::Tabs(tabs) => {
@@ -268,13 +306,13 @@ impl LayoutStrip {
                             }
                         }
                     }
-                    stack.retain(|item| match item {
+                    stack.items.retain(|item| match item {
                         StackItem::Single(id) => *id != entity,
                         StackItem::Tabs(tabs) => !tabs.is_empty(),
                     });
-                    if stack.len() > 1 {
+                    if stack.items.len() > 1 {
                         self.columns.insert(index, Column::Stack(stack));
-                    } else if let Some(remaining_item) = stack.first() {
+                    } else if let Some(remaining_item) = stack.items.first() {
                         match remaining_item {
                             StackItem::Single(id) => {
                                 self.columns.insert(index, Column::Single(*id));
@@ -365,7 +403,7 @@ impl LayoutStrip {
         (index < self.columns.len())
             .then_some(index + 1)
             .and_then(|i| self.columns.get(i))
-            .and_then(|col| col.at_or_last(stack_pos))
+            .and_then(|col| resolve_entry(col, stack_pos))
     }
 
     pub fn left_neighbour(&self, entity: Entity) -> Option<Entity> {
@@ -374,7 +412,7 @@ impl LayoutStrip {
         (index > 0)
             .then(|| index - 1)
             .and_then(|i| self.columns.get(i))
-            .and_then(|col| col.at_or_last(stack_pos))
+            .and_then(|col| resolve_entry(col, stack_pos))
     }
 
     /// Stacks the window with the given ID onto the panel to its left.
@@ -395,23 +433,37 @@ impl LayoutStrip {
         }
 
         let column_to_stack = self.columns.remove(index).unwrap();
-        let items_to_stack = match column_to_stack {
+        let (items_to_stack, source_focus) = match column_to_stack {
             Column::Fullscren(_) => return Ok(()),
-            Column::Single(id) => vec![StackItem::Single(id)],
-            Column::Tabs(tabs) => vec![StackItem::Tabs(tabs)],
-            Column::Stack(items) => items,
+            Column::Single(id) => (vec![StackItem::Single(id)], None),
+            Column::Tabs(tabs) => (vec![StackItem::Tabs(tabs)], None),
+            Column::Stack(stack) => (stack.items, stack.last_focused),
         };
 
         let target_column = self.columns.remove(index - 1).unwrap();
         let new_column = match target_column {
             Column::Fullscren(_) => return Ok(()),
             Column::Single(id) => {
-                Column::Stack([vec![StackItem::Single(id)], items_to_stack].concat())
+                let items = [vec![StackItem::Single(id)], items_to_stack].concat();
+                Column::Stack(Stack {
+                    items,
+                    last_focused: source_focus,
+                })
             }
             Column::Tabs(tabs) => {
-                Column::Stack([vec![StackItem::Tabs(tabs)], items_to_stack].concat())
+                let items = [vec![StackItem::Tabs(tabs)], items_to_stack].concat();
+                Column::Stack(Stack {
+                    items,
+                    last_focused: source_focus,
+                })
             }
-            Column::Stack(items) => Column::Stack([items, items_to_stack].concat()),
+            Column::Stack(mut target) => {
+                target.items.extend(items_to_stack);
+                if let Some(focus) = source_focus {
+                    target.last_focused = Some(focus);
+                }
+                Column::Stack(target)
+            }
         };
 
         self.columns.insert(index - 1, new_column);
@@ -432,13 +484,15 @@ impl LayoutStrip {
         let index = self.index_of(entity)?;
         let column = self.columns.remove(index).unwrap();
 
-        if let Column::Stack(mut items) = column {
-            let item_index = items
+        if let Column::Stack(mut stack) = column {
+            let item_index = stack
+                .items
                 .iter()
                 .position(|item| item.contains(entity))
                 .ok_or(Error::NotFound(format!("Entity {entity} not in stack")))?;
 
-            let removed_item = items.remove(item_index);
+            let removed_item = stack.items.remove(item_index);
+            stack.forget_if(entity);
 
             // Re-insert the unstacked item as a single/tabs panel
             let unstacked_column = match removed_item {
@@ -448,14 +502,14 @@ impl LayoutStrip {
             self.columns.insert(index, unstacked_column);
 
             // Re-insert the modified stack (if not empty) at the original position
-            if !items.is_empty() {
-                let new_column = if items.len() == 1 {
-                    match items.remove(0) {
+            if !stack.items.is_empty() {
+                let new_column = if stack.items.len() == 1 {
+                    match stack.items.remove(0) {
                         StackItem::Single(id) => Column::Single(id),
                         StackItem::Tabs(tabs) => Column::Tabs(tabs),
                     }
                 } else {
-                    Column::Stack(items)
+                    Column::Stack(stack)
                 };
                 self.columns.insert(index, new_column);
             }
@@ -478,7 +532,11 @@ impl LayoutStrip {
             .iter()
             .flat_map(|column| match column {
                 Column::Single(entity) | Column::Fullscren(entity) => vec![*entity],
-                Column::Stack(items) => items.iter().flat_map(StackItem::all_windows).collect(),
+                Column::Stack(stack) => stack
+                    .items
+                    .iter()
+                    .flat_map(StackItem::all_windows)
+                    .collect(),
                 Column::Tabs(ids) => ids.clone(),
             })
             .collect()
@@ -513,7 +571,7 @@ impl LayoutStrip {
                     Column::Single(entity) | Column::Fullscren(entity) => {
                         vec![StackItem::Single(*entity)]
                     }
-                    Column::Stack(stack) => stack.clone(),
+                    Column::Stack(stack) => stack.items.clone(),
                     Column::Tabs(tabs) => vec![StackItem::Tabs(tabs.clone())],
                 };
 
@@ -591,9 +649,9 @@ impl LayoutStrip {
         let column = self.get(index).ok()?;
         match column {
             Column::Single(_) | Column::Tabs(_) | Column::Fullscren(_) => None,
-            Column::Stack(items) => {
-                let pos = items.iter().position(|item| item.contains(entity))?;
-                (pos > 0).then(|| items[pos - 1].top()).flatten()
+            Column::Stack(stack) => {
+                let pos = stack.position_of(entity)?;
+                (pos > 0).then(|| stack.items[pos - 1].top()).flatten()
             }
         }
     }
@@ -603,7 +661,7 @@ impl LayoutStrip {
             .and_then(|idx| self.get(idx))
             .map(|col| match col {
                 Column::Tabs(tabs) => tabs.contains(&entity),
-                Column::Stack(items) => items.iter().any(|item| {
+                Column::Stack(stack) => stack.items.iter().any(|item| {
                     if let StackItem::Tabs(tabs) = item {
                         tabs.contains(&entity)
                     } else {
@@ -619,6 +677,33 @@ impl LayoutStrip {
         self.columns
             .front()
             .is_some_and(|column| matches!(column, Column::Fullscren(_)))
+    }
+
+    /// Records `entity` as the most recently focused window of its enclosing
+    /// `Stack` (if any). Returns true when the strip actually contained the
+    /// entity — the caller can short-circuit its search across other strips.
+    pub fn remember_stack_focus(&mut self, entity: Entity) -> bool {
+        for column in &mut self.columns {
+            if let Column::Stack(stack) = column
+                && stack.contains(entity)
+            {
+                stack.last_focused = Some(entity);
+                return true;
+            }
+        }
+        self.contains(entity)
+    }
+}
+
+/// Resolves the target entity inside a neighbouring column during east/west
+/// navigation. For stacks we honour `last_focused` so the user returns to the
+/// window they were last on; for everything else we fall back to the same
+/// stack row (`index`) or the last item if the destination is shorter.
+fn resolve_entry(column: &Column, index: usize) -> Option<Entity> {
+    match column {
+        Column::Single(id) | Column::Fullscren(id) => Some(*id),
+        Column::Stack(stack) => stack.remembered_or_at(index),
+        Column::Tabs(tabs) => tabs.first().copied(),
     }
 }
 
@@ -984,9 +1069,9 @@ mod tests {
         // Check internal structure
         match strip.get(0).unwrap() {
             Column::Stack(stack) => {
-                assert_eq!(stack.len(), 2);
-                assert_eq!(stack[0], StackItem::Single(entities[0]));
-                assert_eq!(stack[1], StackItem::Single(entities[1]));
+                assert_eq!(stack.items.len(), 2);
+                assert_eq!(stack.items[0], StackItem::Single(entities[0]));
+                assert_eq!(stack.items[1], StackItem::Single(entities[1]));
             }
             Column::Single(_) | Column::Fullscren(_) | Column::Tabs(_) => {
                 panic!("Expected a stack")
@@ -1169,9 +1254,9 @@ mod tests {
 
         assert_eq!(strip.len(), 2);
         match strip.get(0).unwrap() {
-            Column::Stack(items) => {
-                assert_eq!(items.len(), 2);
-                match &items[0] {
+            Column::Stack(stack) => {
+                assert_eq!(stack.items.len(), 2);
+                match &stack.items[0] {
                     StackItem::Tabs(tabs) => assert_eq!(tabs, &vec![e1, e4]),
                     StackItem::Single(_) => panic!("Expected Tabs in stack"),
                 }
@@ -1436,6 +1521,113 @@ mod tests {
         match strip.get(0).unwrap() {
             Column::Single(id) => assert_eq!(id, e3),
             _ => panic!("Expected Single column after removing all but one tab"),
+        }
+    }
+
+    /// Regression for issue #164: after entering a stack, moving vertically,
+    /// then leaving and returning, the stack should restore the window that
+    /// was last focused in it — not the entity at the source column's row.
+    #[test]
+    fn test_stack_remembers_last_focus_for_east_west() {
+        let mut world = World::new();
+        let entities = world.spawn_batch(vec![(), (), ()]).collect::<Vec<Entity>>();
+
+        // Start: [Single(e0), Single(e1), Single(e2)]
+        // Build the issue scenario: left single + right stack of two.
+        // Stack e2 onto e1: [Single(e0), Stack(e1, e2)]
+        let mut strip = LayoutStrip::default();
+        for &e in &entities {
+            strip.append(e);
+        }
+        strip.stack(entities[2]).unwrap();
+
+        // East from e0 goes to top of stack (e1) — matches the issue's initial
+        // state since the stack has no focus memory yet.
+        assert_eq!(strip.right_neighbour(entities[0]), Some(entities[1]));
+
+        // User moves south inside the stack: focus e2 (bottom).
+        strip.remember_stack_focus(entities[2]);
+
+        // West takes us to the single left column.
+        assert_eq!(strip.left_neighbour(entities[2]), Some(entities[0]));
+
+        // East from the single left column should now return to e2, the last
+        // focused window inside the right stack — not e1.
+        assert_eq!(strip.right_neighbour(entities[0]), Some(entities[2]));
+    }
+
+    /// When the remembered focus leaves the stack, navigation falls back to
+    /// the stack row mirroring the source column's position.
+    #[test]
+    fn test_stack_focus_fallback_after_removal() {
+        let mut world = World::new();
+        let entities = world.spawn_batch(vec![(), (), ()]).collect::<Vec<Entity>>();
+
+        let mut strip = LayoutStrip::default();
+        for &e in &entities {
+            strip.append(e);
+        }
+        // [Single(e0), Stack(e1, e2)]
+        strip.stack(entities[2]).unwrap();
+        strip.remember_stack_focus(entities[2]);
+
+        // Remove the remembered window from the stack.
+        strip.remove(entities[2]);
+
+        // Stack collapsed into Single(e1); east from e0 goes there trivially.
+        assert_eq!(strip.right_neighbour(entities[0]), Some(entities[1]));
+    }
+
+    /// A freshly-created stack has no focus memory yet, so the first east
+    /// navigation from a neighbour lands on the top — matching the issue's
+    /// reported initial behaviour. Memory is only populated once the user
+    /// actively focuses inside the stack.
+    #[test]
+    fn test_stack_starts_without_last_focused() {
+        let mut world = World::new();
+        let entities = world.spawn_batch(vec![(), (), ()]).collect::<Vec<Entity>>();
+
+        let mut strip = LayoutStrip::default();
+        for &e in &entities {
+            strip.append(e);
+        }
+        strip.stack(entities[2]).unwrap();
+
+        match strip.get(1).unwrap() {
+            Column::Stack(stack) => assert_eq!(stack.last_focused, None),
+            _ => panic!("expected stack at index 1"),
+        }
+    }
+
+    /// Unstacking the remembered entity must clear `last_focused` so stale
+    /// references don't leak into future navigation.
+    #[test]
+    fn test_unstack_clears_last_focused() {
+        let mut world = World::new();
+        let entities = world
+            .spawn_batch(vec![(), (), (), ()])
+            .collect::<Vec<Entity>>();
+
+        let mut strip = LayoutStrip::default();
+        for &e in &entities {
+            strip.append(e);
+        }
+        // [Single(e0), Stack(e1, e2, e3)]
+        strip.stack(entities[2]).unwrap();
+        strip.stack(entities[3]).unwrap();
+        strip.remember_stack_focus(entities[3]);
+
+        // Unstack e3: the stack drops its remembered focus.
+        strip.unstack(entities[3]).unwrap();
+
+        // Find the remaining stack (now 2 items) and confirm it forgot e3.
+        let stack_column = (0..strip.len())
+            .filter_map(|i| strip.get(i).ok())
+            .find(|c| matches!(c, Column::Stack(_)))
+            .expect("stack still present");
+        match stack_column {
+            Column::Stack(stack) => assert_eq!(stack.last_focused, None),
+            _ => unreachable!(),
         }
     }
 
