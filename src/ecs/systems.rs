@@ -570,24 +570,36 @@ pub(super) fn animate_entities(
     config: Res<Config>,
     commands: ParallelCommands,
 ) {
-    let move_ratio = config.animation_speed() * time.delta_secs_f64();
-    let move_delta = move_ratio * f64::from(active_display.display().width());
+    // Frame-rate-independent exponential smoothing (ease-out).
+    // `animation_speed` is the decay rate (per second); higher = snappier.
+    // t = 1 - e^(-rate*dt) is the fraction of remaining distance consumed this frame.
+    let _ = active_display;
+    let rate = config.animation_speed();
+    let t = (1.0 - (-rate * time.delta_secs_f64()).exp()).clamp(0.0, 1.0) as f32;
+    const SNAP_THRESHOLD: f32 = 1.0;
 
     animate
         .par_iter_mut()
         .for_each(|(mut position, entity, RepositionMarker(origin))| {
-            let delta = position
-                .0
-                .as_vec2()
-                .move_towards(origin.as_vec2(), move_delta as f32)
-                .as_ivec2();
+            let target = origin.as_vec2();
+            let current = position.0.as_vec2();
+            let lerped = current.lerp(target, t);
+
+            // Snap once we're within a pixel of the target (or after one effectively-
+            // complete tick), so the marker is dropped promptly.
+            let finished = (target - lerped).length() <= SNAP_THRESHOLD;
+            let new_pos = if finished {
+                *origin
+            } else {
+                lerped.round().as_ivec2()
+            };
 
             trace!(
-                "entity {entity} source {} dest {origin} delta {move_delta} moving to {delta}",
+                "entity {entity} source {} dest {origin} t {t:.3} moving to {new_pos}",
                 position.0,
             );
-            position.0 = delta;
-            if *origin == delta {
+            position.0 = new_pos;
+            if finished {
                 commands.command_scope(|mut command| {
                     command.entity(entity).try_remove::<RepositionMarker>();
                 });
@@ -614,8 +626,11 @@ pub(super) fn animate_resize_entities(
     config: Res<Config>,
     commands: ParallelCommands,
 ) {
-    let move_ratio = config.animation_speed() * time.delta_secs_f64();
-    let move_delta = move_ratio * f64::from(active_display.display().width());
+    // Matches animate_entities: exponential ease-out, frame-rate independent.
+    let _ = active_display;
+    let rate = config.animation_speed();
+    let t = (1.0 - (-rate * time.delta_secs_f64()).exp()).clamp(0.0, 1.0) as f32;
+    const SNAP_THRESHOLD: f32 = 1.0;
 
     animate
         .par_iter_mut()
@@ -632,18 +647,23 @@ pub(super) fn animate_resize_entities(
                 }
             }
 
-            let delta = bounds
-                .0
-                .as_vec2()
-                .move_towards(size.as_vec2(), move_delta as f32)
-                .as_ivec2();
+            let target = size.as_vec2();
+            let current = bounds.0.as_vec2();
+            let lerped = current.lerp(target, t);
+
+            let finished = (target - lerped).length() <= SNAP_THRESHOLD;
+            let new_size = if finished {
+                *size
+            } else {
+                lerped.round().as_ivec2()
+            };
 
             trace!(
-                "entity {entity} source {} dest {size} delta {move_delta} resizing to {delta}",
+                "entity {entity} source {} dest {size} t {t:.3} resizing to {new_size}",
                 bounds.0,
             );
-            bounds.0 = delta;
-            if *size == delta {
+            bounds.0 = new_size;
+            if finished {
                 commands.command_scope(|mut command| {
                     command.entity(entity).try_remove::<ResizeMarker>();
                 });
