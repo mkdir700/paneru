@@ -124,14 +124,22 @@ pub(super) fn mouse_follows_focus(
         config.skip_reshuffle(),
         config.ffm_flag()
     );
-    if config.mouse_follows_focus()
+    let auto_center_mouse = config.auto_center() && config.auto_center_mouse();
+    let should_warp = config.mouse_follows_focus() || auto_center_mouse;
+    if should_warp
         && !config.skip_reshuffle()
         && config.ffm_flag().is_none_or(|id| id != window.id())
         && let Some(frame) = windows.moving_frame(entity)
     {
         let display_bounds = active_display.bounds();
-        let visible = display_bounds.intersect(frame);
-        let origin = visible.center();
+        // `autocenter_window_on_focus` runs in the same tick and repositions
+        // via Commands, so `frame` here may still be the pre-center position.
+        // When auto-centering the mouse, target the display center directly.
+        let origin = if auto_center_mouse {
+            display_bounds.center()
+        } else {
+            display_bounds.intersect(frame).center()
+        };
         debug!("centering on {} {origin}", window.id());
         window_manager.warp_mouse(origin);
     }

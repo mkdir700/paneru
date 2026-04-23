@@ -22,6 +22,7 @@ General behavior settings for the window manager.
 | `preset_column_widths` | Array (Float) | `[0.25, 0.33, 0.5, 0.66, 0.75]` | Ratios of the screen width used by the `window_resize` command to cycle sizes. |
 | `animation_speed` | Float | `50` | Speed of window animations (1/10th of screen size per second). Set to a very high value to effectively disable animations. |
 | `auto_center` | Boolean | `false` | Automatically center the focused window on the screen when switching focus. |
+| `auto_center_mouse` | Boolean | `false` | When `auto_center` is enabled, also warp the mouse cursor to the centered window on focus changes. Independent from `mouse_follows_focus`. |
 | `sliver_height` | Float (0.1–1.0) | `1.0` | Vertical ratio of off-screen windows kept visible to prevent macOS from relocating them. |
 | `sliver_width` | Integer (px) | `5` | Horizontal width of off-screen windows kept visible. |
 | `menubar_height` | Integer (px) | *Auto* | Manually override the detected macOS menubar height. |

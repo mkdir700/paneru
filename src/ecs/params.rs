@@ -64,6 +64,10 @@ impl Configuration<'_> {
         self.config.auto_center()
     }
 
+    pub fn auto_center_mouse(&self) -> bool {
+        self.config.auto_center_mouse()
+    }
+
     pub fn window_hidden_ratio(&self) -> f64 {
         self.config.window_hidden_ratio()
     }

@@ -631,6 +631,16 @@ impl Config {
     pub fn auto_center(&self) -> bool {
         self.options().auto_center.is_some_and(|center| center)
     }
+
+    /// When `auto_center` is enabled, whether the mouse cursor should also warp
+    /// to the centered window on focus changes. Lets users keep the cursor
+    /// aligned with the centered column without enabling the broader
+    /// `mouse_follows_focus` behavior. Default: false.
+    pub fn auto_center_mouse(&self) -> bool {
+        self.options()
+            .auto_center_mouse
+            .is_some_and(|follow| follow)
+    }
 }
 
 fn parse_hex_color(hex: &str) -> (f64, f64, f64) {
@@ -800,6 +810,9 @@ pub struct MainOptions {
     pub animation_speed: Option<f64>,
     /// Automatically center the window when switching focus with keyboard.
     pub auto_center: Option<bool>,
+    /// When `auto_center` is enabled, also warp the mouse cursor to the
+    /// centered window on focus changes. Independent from `mouse_follows_focus`.
+    pub auto_center_mouse: Option<bool>,
     /// Height of off-screen window slivers as a ratio (0.0–1.0) of the display height.
     /// Lower values hide the window's corner radius at screen edges.
     /// Default: 1.0 (full height).
