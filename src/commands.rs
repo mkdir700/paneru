@@ -14,10 +14,17 @@ use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Windows};
 use crate::ecs::{
     ActiveDisplayMarker, ActiveWorkspaceMarker, FocusFollowsMouse, FocusedMarker, FullWidthMarker,
     NativeFullscreenMarker, SelectedVirtualMarker, SendMessageTrigger, Unmanaged, WMEventTrigger,
-    focus_entity, reposition_entity, reshuffle_around, resize_entity,
+    WorkspaceOrder, focus_entity, reposition_entity, reshuffle_around, resize_entity,
 };
 use crate::events::Event;
 use crate::manager::{Application, Display, Origin, Size, Window, WindowManager, origin_to};
+
+type WorkspaceNavItem<'a> = (
+    &'a LayoutStrip,
+    Option<&'a NativeFullscreenMarker>,
+    Option<&'a WorkspaceOrder>,
+    Option<&'a ChildOf>,
+);
 
 /// Represents a cardinal or directional choice for window manipulation.
 #[derive(Clone, Debug)]
@@ -186,6 +193,82 @@ fn get_window_in_direction(
     }
 }
 
+fn get_window_in_adjacent_workspace(
+    direction: &Direction,
+    active_strip: &LayoutStrip,
+    active_display_entity: Entity,
+    workspaces: &Query<WorkspaceNavItem>,
+) -> Option<Entity> {
+    let active_order = workspaces.iter().find_map(|(strip, _, order, child)| {
+        (strip.id() == active_strip.id()
+            && child.is_some_and(|child| child.parent() == active_display_entity))
+        .then_some(order.map(|order| order.0))
+        .flatten()
+    });
+
+    let candidates = workspaces
+        .iter()
+        .filter(|(strip, _, _, child)| {
+            strip.id() != active_strip.id()
+                && !strip.all_windows().is_empty()
+                && child.is_some_and(|child| child.parent() == active_display_entity)
+        })
+        .filter_map(|(strip, _, order, _)| {
+            let entity = match direction {
+                Direction::East => strip.first().ok().and_then(|column| column.top()),
+                Direction::West => strip.last().ok().and_then(|column| column.top()),
+                _ => None,
+            }?;
+            let order = order.map(|order| order.0);
+            Some((strip.id(), order, entity))
+        })
+        .collect::<Vec<_>>();
+
+    match (direction, active_order) {
+        (Direction::East, Some(active_order)) => candidates
+            .iter()
+            .filter_map(|(_, order, entity)| {
+                let order = (*order)?;
+                (order > active_order).then_some((order, *entity))
+            })
+            .min_by_key(|(order, _)| *order)
+            .map(|(_, entity)| entity)
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .filter(|(id, order, _)| order.is_none() && *id > active_strip.id())
+                    .min_by_key(|(id, _, _)| *id)
+                    .map(|(_, _, entity)| *entity)
+            }),
+        (Direction::West, Some(active_order)) => candidates
+            .iter()
+            .filter_map(|(_, order, entity)| {
+                let order = (*order)?;
+                (order < active_order).then_some((order, *entity))
+            })
+            .max_by_key(|(order, _)| *order)
+            .map(|(_, entity)| entity)
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .filter(|(id, order, _)| order.is_none() && *id < active_strip.id())
+                    .max_by_key(|(id, _, _)| *id)
+                    .map(|(_, _, entity)| *entity)
+            }),
+        (Direction::East, None) => candidates
+            .into_iter()
+            .filter(|(id, _, _)| *id > active_strip.id())
+            .min_by_key(|(id, _, _)| *id)
+            .map(|(_, _, entity)| entity),
+        (Direction::West, None) => candidates
+            .into_iter()
+            .filter(|(id, _, _)| *id < active_strip.id())
+            .max_by_key(|(id, _, _)| *id)
+            .map(|(_, _, entity)| entity),
+        _ => None,
+    }
+}
+
 /// Handles the "focus" command, moving focus to a window in a specified direction.
 ///
 /// # Arguments
@@ -202,7 +285,7 @@ fn get_window_in_direction(
 fn command_move_focus(
     mut messages: MessageReader<Event>,
     windows: Windows,
-    workspaces: Query<(&LayoutStrip, Option<&NativeFullscreenMarker>)>,
+    workspaces: Query<WorkspaceNavItem>,
     active_display: ActiveDisplay,
     mut commands: Commands,
 ) {
@@ -218,8 +301,8 @@ fn command_move_focus(
     if let Some(fullscreen) = active_display.fullscreen()
         && matches!(direction, Direction::West)
         && let Some(strip) = workspaces
-            .into_iter()
-            .find_map(|(strip, _)| (strip.id() == fullscreen.previous_strip).then_some(strip))
+            .iter()
+            .find_map(|(strip, _, _, _)| (strip.id() == fullscreen.previous_strip).then_some(strip))
         && let Ok(column) = strip.last()
         && let Some(entity) = column.top()
     {
@@ -232,20 +315,21 @@ fn command_move_focus(
         return;
     };
 
-    // At the right edge going East, enter the fullscreen workspaces.
     let candidate =
         get_window_in_direction(direction, focused_entity, active_strip).or_else(|| {
-            (matches!(direction, Direction::East)
-                && active_strip.right_neighbour(focused_entity).is_none())
-            .then(|| {
-                workspaces
-                    .iter()
-                    .find(|(strip, fullscreen)| {
-                        fullscreen.is_some() && strip.id() != active_strip.id()
-                    })
-                    .and_then(|(strip, _)| strip.get(0).ok().and_then(|col| col.top()))
-            })
-            .flatten()
+            let at_edge = match direction {
+                Direction::East => active_strip.right_neighbour(focused_entity).is_none(),
+                Direction::West => active_strip.left_neighbour(focused_entity).is_none(),
+                Direction::North | Direction::South | Direction::First | Direction::Last => false,
+            };
+            at_edge.then(|| {
+                get_window_in_adjacent_workspace(
+                    direction,
+                    active_strip,
+                    active_display.entity(),
+                    &workspaces,
+                )
+            })?
         });
 
     if let Some(entity) = candidate {

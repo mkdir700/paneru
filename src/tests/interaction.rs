@@ -9,6 +9,7 @@ use crate::ecs::{
 };
 use crate::events::Event;
 use crate::manager::{Display, Origin, Size, Window};
+use crate::platform::WorkspaceId;
 use crate::{assert_focused, assert_window_at, assert_window_size};
 
 use super::*;
@@ -349,6 +350,100 @@ fn test_fullscreen_west_returns_to_rightmost_tiled_window() {
         },
         Event::Command {
             command: Command::Window(Operation::Focus(Direction::West)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::East)),
+        },
+    ]);
+
+    verify_focused_window(2, harness.app.world_mut());
+}
+
+#[test]
+fn test_startup_fullscreen_workspace_can_be_focused_from_right_edge() {
+    let mut harness = TestHarness::new();
+    let mock_app = setup_process(harness.app.world_mut());
+    let internal_queue = harness.internal_queue.clone();
+    let windows: TestWindowSpawner = Box::new(move |workspace_id: WorkspaceId| {
+        let origin = Origin::new(0, 0);
+        let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+        let window_ids = match workspace_id {
+            TEST_WORKSPACE_ID => vec![0, 1],
+            id if id == TEST_WORKSPACE_ID + 1 => vec![2],
+            _ => vec![],
+        };
+        window_ids
+            .into_iter()
+            .map(|window_id| {
+                Window::new(Box::new(MockWindow::new(
+                    window_id,
+                    IRect::from_corners(origin, origin + size),
+                    internal_queue.clone(),
+                    mock_app.clone(),
+                )))
+            })
+            .collect()
+    });
+    let wm = MockWindowManager {
+        windows,
+        workspaces: vec![TEST_WORKSPACE_ID, TEST_WORKSPACE_ID + 1],
+        fullscreen_workspaces: vec![TEST_WORKSPACE_ID + 1],
+    };
+
+    let mut harness = harness.with_wm(wm);
+    harness.run(vec![
+        Event::Command {
+            command: Command::PrintState,
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::Last)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::East)),
+        },
+    ]);
+
+    verify_focused_window(2, harness.app.world_mut());
+}
+
+#[test]
+fn test_startup_regular_workspace_can_be_focused_from_right_edge() {
+    let mut harness = TestHarness::new();
+    let mock_app = setup_process(harness.app.world_mut());
+    let internal_queue = harness.internal_queue.clone();
+    let windows: TestWindowSpawner = Box::new(move |workspace_id: WorkspaceId| {
+        let origin = Origin::new(0, 0);
+        let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+        let window_ids = match workspace_id {
+            TEST_WORKSPACE_ID => vec![0, 1],
+            id if id == TEST_WORKSPACE_ID + 1 => vec![2],
+            _ => vec![],
+        };
+        window_ids
+            .into_iter()
+            .map(|window_id| {
+                Window::new(Box::new(MockWindow::new(
+                    window_id,
+                    IRect::from_corners(origin, origin + size),
+                    internal_queue.clone(),
+                    mock_app.clone(),
+                )))
+            })
+            .collect()
+    });
+    let wm = MockWindowManager {
+        windows,
+        workspaces: vec![TEST_WORKSPACE_ID, TEST_WORKSPACE_ID + 1],
+        fullscreen_workspaces: vec![],
+    };
+
+    let mut harness = harness.with_wm(wm);
+    harness.run(vec![
+        Event::Command {
+            command: Command::PrintState,
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::Last)),
         },
         Event::Command {
             command: Command::Window(Operation::Focus(Direction::East)),

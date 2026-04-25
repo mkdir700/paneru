@@ -29,9 +29,9 @@ use crate::ecs::layout::LayoutStrip;
 use crate::ecs::params::{ActiveDisplay, Configuration, Windows};
 use crate::ecs::{
     ActiveWorkspaceMarker, Bounds, BruteforceWindows, FlashMessage, Initializing,
-    LocateDockTrigger, Position, RefreshWindowSizes, Scrolling, SelectedVirtualMarker,
-    StackAdjustedResize, Unmanaged, WidthRatio, WindowDraggedMarker, WindowProperties,
-    focus_entity, reshuffle_around,
+    LocateDockTrigger, NativeFullscreenMarker, Position, RefreshWindowSizes, Scrolling,
+    SelectedVirtualMarker, StackAdjustedResize, Unmanaged, WidthRatio, WindowDraggedMarker,
+    WindowProperties, WorkspaceOrder, focus_entity, reshuffle_around,
 };
 use crate::events::Event;
 use crate::manager::{
@@ -128,23 +128,39 @@ pub fn gather_displays(window_manager: Res<WindowManager>, mut commands: Command
             return;
         };
 
-        for id in workspaces {
-            let strip = LayoutStrip::new(id, 0);
+        let workspace_kinds = workspaces
+            .iter()
+            .map(|id| (*id, window_manager.is_fullscreen_workspace(*id)))
+            .collect::<Vec<_>>();
+
+        for (index, (id, fullscreen)) in workspace_kinds.iter().copied().enumerate() {
+            let mut workspace = commands.spawn((
+                LayoutStrip::new(id, 0),
+                origin.clone(),
+                WorkspaceOrder(index),
+                SelectedVirtualMarker,
+                ChildOf(entity),
+            ));
+
             if id == active_space {
-                commands.spawn((
-                    strip,
-                    origin.clone(),
-                    ActiveWorkspaceMarker,
-                    SelectedVirtualMarker,
-                    ChildOf(entity),
-                ));
-            } else {
-                commands.spawn((
-                    strip,
-                    origin.clone(),
-                    SelectedVirtualMarker,
-                    ChildOf(entity),
-                ));
+                workspace.insert(ActiveWorkspaceMarker);
+            }
+
+            if fullscreen {
+                let previous_strip = workspace_kinds[..index]
+                    .iter()
+                    .rev()
+                    .find_map(|(id, fullscreen)| (!fullscreen).then_some(*id))
+                    .or_else(|| {
+                        workspace_kinds
+                            .iter()
+                            .find_map(|(id, fullscreen)| (!fullscreen).then_some(*id))
+                    })
+                    .unwrap_or(id);
+                workspace.insert(NativeFullscreenMarker {
+                    previous_strip,
+                    previous_index: 0,
+                });
             }
         }
     }
@@ -969,11 +985,14 @@ fn reparent_existing_workspaces(
     commands: &mut Commands,
 ) {
     // Verifies that a moved display has all the workspaces which it owns.
-    for &id in workspace_ids {
+    for (index, &id) in workspace_ids.iter().enumerate() {
         let mut found = false;
         for (strip, entity, child) in existing_strips {
             if strip.id() == id {
                 found = true;
+                if let Ok(mut cmd) = commands.get_entity(entity) {
+                    cmd.insert(WorkspaceOrder(index));
+                }
                 if child.is_none() || child.is_some_and(|child| child.parent() != display_entity) {
                     // Re-parent this workspace
                     if let Ok(mut cmd) = commands.get_entity(entity) {
@@ -995,6 +1014,7 @@ fn reparent_existing_workspaces(
             commands.spawn((
                 origin.clone(),
                 LayoutStrip::new(id, 0),
+                WorkspaceOrder(index),
                 SelectedVirtualMarker,
                 ChildOf(display_entity),
             ));

@@ -111,6 +111,10 @@ pub trait WindowManagerApi: Send + Sync {
     fn active_display_space(&self, display_id: CGDirectDisplayID) -> Result<WorkspaceId>;
     /// Returns `true` if the current space on the given display is a native fullscreen space.
     fn is_fullscreen_space(&self, display_id: CGDirectDisplayID) -> bool;
+    /// Returns `true` if the given workspace is a native fullscreen space.
+    fn is_fullscreen_workspace(&self, _space_id: WorkspaceId) -> bool {
+        false
+    }
     /// Centers the mouse cursor on a given window within its display bounds if it's not already within the window.
     ///
     /// # Arguments
@@ -378,8 +382,12 @@ impl WindowManagerApi for WindowManagerOS {
 
     fn is_fullscreen_space(&self, display_id: CGDirectDisplayID) -> bool {
         self.active_display_space(display_id)
-            .map(|space_id| unsafe { SLSSpaceGetType(self.main_cid, space_id) } == 4)
+            .map(|space_id| self.is_fullscreen_workspace(space_id))
             .unwrap_or(false)
+    }
+
+    fn is_fullscreen_workspace(&self, space_id: WorkspaceId) -> bool {
+        unsafe { SLSSpaceGetType(self.main_cid, space_id) == 4 }
     }
 
     /// Centers the mouse cursor on the window if it's not already within the window's bounds.

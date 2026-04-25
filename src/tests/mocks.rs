@@ -179,6 +179,7 @@ impl ApplicationApi for MockApplication {
 pub(crate) struct MockWindowManager {
     pub(crate) windows: TestWindowSpawner,
     pub(crate) workspaces: Vec<WorkspaceId>,
+    pub(crate) fullscreen_workspaces: Vec<WorkspaceId>,
 }
 
 impl std::fmt::Debug for MockWindowManager {
@@ -234,6 +235,10 @@ impl WindowManagerApi for MockWindowManager {
 
     fn is_fullscreen_space(&self, _display_id: CGDirectDisplayID) -> bool {
         false
+    }
+
+    fn is_fullscreen_workspace(&self, space_id: WorkspaceId) -> bool {
+        self.fullscreen_workspaces.contains(&space_id)
     }
 
     /// Does nothing, as mouse centering is not tested at this level.

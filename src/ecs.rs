@@ -202,6 +202,9 @@ pub struct ActiveWorkspaceMarker;
 #[derive(Component)]
 pub struct SelectedVirtualMarker;
 
+#[derive(Component, Clone, Copy, Debug)]
+pub struct WorkspaceOrder(pub usize);
+
 #[derive(Component)]
 pub struct FlashMessage(pub String);
 
