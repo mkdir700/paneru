@@ -62,7 +62,10 @@ pub(super) fn remember_stack_focus(
 ) {
     let focused_entity = trigger.event().entity;
     for mut strip in &mut strips {
-        if strip.bypass_change_detection().remember_stack_focus(focused_entity) {
+        if strip
+            .bypass_change_detection()
+            .remember_stack_focus(focused_entity)
+        {
             break;
         }
     }

@@ -2,9 +2,13 @@ use bevy::prelude::*;
 
 use crate::commands::{Command, Direction, Operation};
 use crate::config::{Config, MainOptions, WindowParams};
-use crate::ecs::SpawnWindowTrigger;
+use crate::ecs::layout::LayoutStrip;
+use crate::ecs::{
+    ActiveWorkspaceMarker, FocusedMarker, NativeFullscreenMarker, Position, SelectedVirtualMarker,
+    SpawnWindowTrigger,
+};
 use crate::events::Event;
-use crate::manager::{Origin, Size, Window};
+use crate::manager::{Display, Origin, Size, Window};
 use crate::{assert_focused, assert_window_at, assert_window_size};
 
 use super::*;
@@ -284,6 +288,74 @@ fn test_rapid_focus_not_swallowed() {
     }
 
     verify_focused_window(3, harness.app.world_mut());
+}
+
+#[test]
+fn test_fullscreen_west_returns_to_rightmost_tiled_window() {
+    let mut harness = TestHarness::new()
+        .with_windows(4)
+        .on_iteration(0, |world| {
+            let first = find_window_entity(0, world);
+            let second = find_window_entity(1, world);
+            let fullscreen_window = find_window_entity(2, world);
+            let rightmost = find_window_entity(3, world);
+
+            let display_entity = world
+                .query_filtered::<Entity, With<Display>>()
+                .single(world)
+                .expect("display should exist");
+
+            let mut workspaces = world.query::<(Entity, &mut LayoutStrip)>();
+            let (normal_entity, mut normal_strip) = workspaces
+                .iter_mut(world)
+                .find(|(_, strip)| strip.id() == TEST_WORKSPACE_ID)
+                .expect("normal workspace should exist");
+            for entity in [first, second, fullscreen_window, rightmost] {
+                normal_strip.remove(entity);
+            }
+            normal_strip.append(first);
+            normal_strip.append(second);
+            normal_strip.append(rightmost);
+
+            world
+                .entity_mut(normal_entity)
+                .remove::<ActiveWorkspaceMarker>()
+                .remove::<SelectedVirtualMarker>();
+
+            world.spawn((
+                LayoutStrip::fullscreen(TEST_WORKSPACE_ID + 1, fullscreen_window),
+                Position(Origin::new(0, 0)),
+                NativeFullscreenMarker {
+                    previous_strip: TEST_WORKSPACE_ID,
+                    previous_index: 2,
+                },
+                ActiveWorkspaceMarker,
+                SelectedVirtualMarker,
+                ChildOf(display_entity),
+            ));
+
+            for entity in [first, second, rightmost] {
+                world.entity_mut(entity).remove::<FocusedMarker>();
+            }
+            world.entity_mut(fullscreen_window).insert(FocusedMarker);
+        })
+        .on_iteration(1, |world| {
+            verify_focused_window(3, world);
+        });
+
+    harness.run(vec![
+        Event::Command {
+            command: Command::PrintState,
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::West)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::East)),
+        },
+    ]);
+
+    verify_focused_window(2, harness.app.world_mut());
 }
 
 #[test]

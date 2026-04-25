@@ -140,10 +140,8 @@ impl Column {
         match self {
             Column::Single(_) | Column::Fullscren(_) => {}
             Column::Stack(stack) => {
-                if let Some(StackItem::Tabs(tabs)) = stack
-                    .items
-                    .iter_mut()
-                    .find(|item| item.contains(entity))
+                if let Some(StackItem::Tabs(tabs)) =
+                    stack.items.iter_mut().find(|item| item.contains(entity))
                     && let Some(pos) = tabs.iter().position(|&e| e == entity)
                 {
                     tabs.swap(0, pos);

@@ -220,7 +220,7 @@ fn command_move_focus(
         && let Some(strip) = workspaces
             .into_iter()
             .find_map(|(strip, _)| (strip.id() == fullscreen.previous_strip).then_some(strip))
-        && let Ok(column) = strip.get(fullscreen.previous_index.saturating_sub(1))
+        && let Ok(column) = strip.last()
         && let Some(entity) = column.top()
     {
         debug!("fullscreen: swap raising {entity}");
