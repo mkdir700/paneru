@@ -5,7 +5,7 @@ use crate::config::{Config, MainOptions, WindowParams};
 use crate::ecs::layout::LayoutStrip;
 use crate::ecs::{
     ActiveWorkspaceMarker, FocusedMarker, NativeFullscreenMarker, Position, SelectedVirtualMarker,
-    SpawnWindowTrigger,
+    SpawnWindowTrigger, WorkspaceOrder,
 };
 use crate::events::Event;
 use crate::manager::{Display, Origin, Size, Window};
@@ -330,6 +330,10 @@ fn test_fullscreen_west_returns_to_rightmost_tiled_window() {
                     previous_strip: TEST_WORKSPACE_ID,
                     previous_index: 2,
                 },
+                // Cross-Space navigation now requires every strip to carry a
+                // WorkspaceOrder; mirror what workspace_change_trigger would
+                // assign in production.
+                WorkspaceOrder(1),
                 ActiveWorkspaceMarker,
                 SelectedVirtualMarker,
                 ChildOf(display_entity),

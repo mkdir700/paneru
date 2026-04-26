@@ -15,8 +15,8 @@ use crate::ecs::layout::LayoutStrip;
 use crate::ecs::params::{ActiveDisplay, Windows};
 use crate::ecs::{
     ActiveWorkspaceMarker, Bounds, NativeFullscreenMarker, Position, RefreshWindowSizes,
-    SelectedVirtualMarker, Timeout, Unmanaged, flash_message, focus_entity, reposition_entity,
-    reshuffle_around,
+    SelectedVirtualMarker, Timeout, Unmanaged, WorkspaceOrder, flash_message, focus_entity,
+    reposition_entity, reshuffle_around,
 };
 use crate::errors::Result;
 use crate::events::Event;
@@ -36,7 +36,22 @@ pub(crate) struct PreviousStripPosition {
     focus: Option<Entity>,
 }
 
-#[allow(clippy::needless_pass_by_value)]
+/// Look up the `WorkspaceOrder` shared by all strips on a given Space.
+///
+/// `WorkspaceOrder` is a Space-level attribute: every strip belonging to the
+/// same macOS Space carries the same value. New strips spawned for an existing
+/// Space must inherit this value so cross-Space navigation (which uses
+/// `WorkspaceOrder` to sort Spaces) keeps working.
+fn space_order<'a, I>(workspace_id: WorkspaceId, strips: I) -> Option<WorkspaceOrder>
+where
+    I: IntoIterator<Item = (&'a LayoutStrip, Option<&'a WorkspaceOrder>)>,
+{
+    strips
+        .into_iter()
+        .find_map(|(strip, order)| (strip.id() == workspace_id).then_some(order).flatten().copied())
+}
+
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
 #[instrument(level = Level::DEBUG, skip_all, fields(trigger))]
 pub(super) fn workspace_change_trigger(
     trigger: On<WMEventTrigger>,
@@ -46,6 +61,8 @@ pub(super) fn workspace_change_trigger(
         Entity,
         Has<ActiveWorkspaceMarker>,
         Has<SelectedVirtualMarker>,
+        Option<&WorkspaceOrder>,
+        Option<&ChildOf>,
     )>,
     active_display: Single<(&Display, Entity), With<ActiveDisplayMarker>>,
     window_manager: Res<WindowManager>,
@@ -63,7 +80,7 @@ pub(super) fn workspace_change_trigger(
 
     let mut remove_from = None;
     let mut insert_into = None;
-    for (strip, entity, active, selected) in &workspaces {
+    for (strip, entity, active, selected, _, _) in &workspaces {
         if active && strip.id() != workspace_id {
             debug!("Workspace id {} no longer active", strip.id());
             remove_from = Some(entity);
@@ -74,20 +91,11 @@ pub(super) fn workspace_change_trigger(
         }
     }
 
-    if insert_into.is_none() {
-        // Fallback: find any strip for this workspace, preferably the one with virtual_index 0.
-        insert_into = workspaces
-            .iter()
-            .filter(|(strip, _, _, _)| strip.id() == workspace_id)
-            .min_by_key(|(strip, _, _, _)| strip.virtual_index)
-            .map(|(_, entity, _, _)| entity);
-    }
-
     if insert_into.is_none()
         && let Some(old_space) = remove_from
         && window_manager.is_fullscreen_space(active_display.id())
         && let Some((_, focused)) = windows.focused()
-        && let Ok((mut old_strip, _, _, _)) = workspaces.get_mut(old_space)
+        && let Ok((mut old_strip, _, _, _, _, _)) = workspaces.get_mut(old_space)
     {
         debug!("workspace_change: space={workspace_id} fullscreen");
 
@@ -97,16 +105,40 @@ pub(super) fn workspace_change_trigger(
         };
         old_strip.remove(focused);
 
+        // Fullscreen Spaces get their own slot in Mission Control; assign the
+        // next available WorkspaceOrder on this display so cross-Space
+        // navigation can sort it.
+        let next_order = workspaces
+            .iter()
+            .filter_map(|(_, _, _, _, order, child)| {
+                child
+                    .is_some_and(|c| c.parent() == display_entity)
+                    .then_some(order)
+                    .flatten()
+                    .map(|o| o.0)
+            })
+            .max()
+            .map_or(0, |m| m + 1);
+
         let fullscreen_strip = LayoutStrip::fullscreen(workspace_id, focused);
         let entity = commands
             .spawn((
                 Position(active_display.bounds().min),
                 fullscreen_marker,
                 fullscreen_strip,
+                WorkspaceOrder(next_order),
                 ChildOf(display_entity),
             ))
             .id();
         insert_into = Some(entity);
+    }
+
+    if insert_into.is_none() {
+        // Either the new Space has no strips yet (transient during startup or
+        // SpaceCreated handling), or the SelectedVirtualMarker invariant was
+        // violated by external test setup. Production code maintains the
+        // invariant via cleanup_selected_space_marker, so this is informational.
+        debug!("workspace_change: no SelectedVirtualMarker strip for workspace {workspace_id}");
     }
 
     if let Some(into) = insert_into
@@ -255,24 +287,40 @@ pub(super) fn workspace_destroyed_trigger(
 pub(super) fn workspace_created_trigger(
     trigger: On<WMEventTrigger>,
     active_display: Single<(&Display, Entity), With<ActiveDisplayMarker>>,
-    workspaces: Query<&LayoutStrip>,
+    workspaces: Query<(&LayoutStrip, Option<&WorkspaceOrder>, Option<&ChildOf>)>,
     mut commands: Commands,
 ) {
     let Event::SpaceCreated { space_id } = trigger.event().0 else {
         return;
     };
 
-    if workspaces.into_iter().any(|strip| strip.id() == space_id) {
+    if workspaces.iter().any(|(strip, _, _)| strip.id() == space_id) {
         warn!("Workspace {space_id} already exists!");
         return;
     }
     debug!("Workspace create {space_id}");
     let (active_display, display_entity) = *active_display;
+
+    // Mission Control appends new Spaces at the end; assign the next order
+    // among Spaces already on this display.
+    let next_order = workspaces
+        .iter()
+        .filter_map(|(_, order, child)| {
+            child
+                .is_some_and(|c| c.parent() == display_entity)
+                .then_some(order)
+                .flatten()
+                .map(|o| o.0)
+        })
+        .max()
+        .map_or(0, |m| m + 1);
+
     let strip = LayoutStrip::new(space_id, 0);
     let origin = Position(active_display.bounds().min);
     commands.spawn((
         strip,
         origin,
+        WorkspaceOrder(next_order),
         SelectedVirtualMarker,
         ChildOf(display_entity),
     ));
@@ -553,7 +601,7 @@ pub(super) fn cleanup_virtual_workspaces(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
 pub(super) fn handle_virtual_window_moves(
     moved_windows: Populated<(Entity, &VirtualMoveMarker), With<Window>>,
     mut workspaces: Query<(
@@ -561,13 +609,14 @@ pub(super) fn handle_virtual_window_moves(
         &mut LayoutStrip,
         &Position,
         Has<ActiveWorkspaceMarker>,
+        Option<&WorkspaceOrder>,
     )>,
     active_display: Single<(Entity, &Display), With<ActiveDisplayMarker>>,
     mut commands: Commands,
 ) {
     let Some((workspace_id, source_entity)) = workspaces
         .iter()
-        .find_map(|(entity, strip, _, active)| active.then_some((strip.id(), entity)))
+        .find_map(|(entity, strip, _, active, _)| active.then_some((strip.id(), entity)))
     else {
         return;
     };
@@ -578,7 +627,7 @@ pub(super) fn handle_virtual_window_moves(
         let follow = matches!(move_marker.move_focus, MoveFocus::Follow);
 
         let target_idx = move_marker.target_virtual_index;
-        let target = workspaces.iter().find_map(|(entity, strip, _, _)| {
+        let target = workspaces.iter().find_map(|(entity, strip, _, _, _)| {
             (strip.id() == workspace_id && strip.virtual_index == target_idx).then_some(entity)
         });
 
@@ -586,7 +635,7 @@ pub(super) fn handle_virtual_window_moves(
         let source_neighbour = workspaces
             .get(source_entity)
             .ok()
-            .and_then(|(_, strip, _, _)| {
+            .and_then(|(_, strip, _, _, _)| {
                 strip
                     .left_neighbour(window_entity)
                     .or_else(|| strip.right_neighbour(window_entity))
@@ -613,12 +662,24 @@ pub(super) fn handle_virtual_window_moves(
             let mut new_strip = LayoutStrip::new(workspace_id, target_idx);
             new_strip.append(window_entity);
 
+            // Inherit the WorkspaceOrder shared by other strips on this Space
+            // so cross-Space navigation continues to sort it correctly.
+            let inherited_order = space_order(
+                workspace_id,
+                workspaces
+                    .iter()
+                    .map(|(_, strip, _, _, order)| (strip, order)),
+            );
+
             let mut spawned = commands.spawn((
                 new_strip,
                 Position(origin),
                 SelectedVirtualMarker,
                 ChildOf(display_entity),
             ));
+            if let Some(order) = inherited_order {
+                spawned.insert(order);
+            }
             if stay {
                 // show_active_workspace needs this to restore the strip
                 // onscreen when the user later switches to this workspace.
@@ -633,7 +694,7 @@ pub(super) fn handle_virtual_window_moves(
         // Preserve the source strip's scroll position for when the user returns.
         if !stay
             && let Ok(mut entity_commands) = commands.get_entity(source_entity)
-            && let Ok((_, source_strip, position, _)) = workspaces.get(source_entity)
+            && let Ok((_, source_strip, position, _, _)) = workspaces.get(source_entity)
         {
             let focus = source_strip
                 .left_neighbour(window_entity)
@@ -645,7 +706,7 @@ pub(super) fn handle_virtual_window_moves(
         }
 
         // Move the window before moving markers to avoid being detected as a moved window.
-        for (entity, mut strip, _, _) in &mut workspaces {
+        for (entity, mut strip, _, _, _) in &mut workspaces {
             if entity == target_entity {
                 strip.append(window_entity);
             } else {

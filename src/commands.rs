@@ -24,6 +24,7 @@ type WorkspaceNavItem<'a> = (
     Option<&'a NativeFullscreenMarker>,
     Option<&'a WorkspaceOrder>,
     Option<&'a ChildOf>,
+    Has<SelectedVirtualMarker>,
 );
 
 /// Represents a cardinal or directional choice for window manipulation.
@@ -193,78 +194,57 @@ fn get_window_in_direction(
     }
 }
 
+/// Pick a focus target on a Space adjacent to `active_strip`.
+///
+/// Cross-Space navigation treats each Space as a black box: each Space
+/// contributes at most one candidate strip — the one currently holding
+/// `SelectedVirtualMarker` (i.e. the virtual workspace the user was last on
+/// when they left that Space). Spaces are sorted by `WorkspaceOrder`, which is
+/// a Space-level attribute shared by every strip on the same Space.
 fn get_window_in_adjacent_workspace(
     direction: &Direction,
     active_strip: &LayoutStrip,
     active_display_entity: Entity,
     workspaces: &Query<WorkspaceNavItem>,
 ) -> Option<Entity> {
-    let active_order = workspaces.iter().find_map(|(strip, _, order, child)| {
-        (strip.id() == active_strip.id()
-            && child.is_some_and(|child| child.parent() == active_display_entity))
-        .then_some(order.map(|order| order.0))
-        .flatten()
-    });
+    let on_active_display = |child: Option<&ChildOf>| {
+        child.is_some_and(|child| child.parent() == active_display_entity)
+    };
+
+    let active_order = workspaces.iter().find_map(|(strip, _, order, child, _)| {
+        (strip.id() == active_strip.id() && on_active_display(child))
+            .then_some(order.map(|order| order.0))
+            .flatten()
+    })?;
+
+    let pick = |strip: &LayoutStrip| match direction {
+        Direction::East => strip.first().ok().and_then(|column| column.top()),
+        Direction::West => strip.last().ok().and_then(|column| column.top()),
+        _ => None,
+    };
 
     let candidates = workspaces
         .iter()
-        .filter(|(strip, _, _, child)| {
-            strip.id() != active_strip.id()
+        .filter(|(strip, _, _, child, selected)| {
+            *selected
+                && strip.id() != active_strip.id()
                 && !strip.all_windows().is_empty()
-                && child.is_some_and(|child| child.parent() == active_display_entity)
+                && on_active_display(*child)
         })
-        .filter_map(|(strip, _, order, _)| {
-            let entity = match direction {
-                Direction::East => strip.first().ok().and_then(|column| column.top()),
-                Direction::West => strip.last().ok().and_then(|column| column.top()),
-                _ => None,
-            }?;
-            let order = order.map(|order| order.0);
-            Some((strip.id(), order, entity))
-        })
-        .collect::<Vec<_>>();
+        .filter_map(|(strip, _, order, _, _)| {
+            let entity = pick(strip)?;
+            Some((order?.0, entity))
+        });
 
-    match (direction, active_order) {
-        (Direction::East, Some(active_order)) => candidates
-            .iter()
-            .filter_map(|(_, order, entity)| {
-                let order = (*order)?;
-                (order > active_order).then_some((order, *entity))
-            })
+    match direction {
+        Direction::East => candidates
+            .filter(|(order, _)| *order > active_order)
             .min_by_key(|(order, _)| *order)
-            .map(|(_, entity)| entity)
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .filter(|(id, order, _)| order.is_none() && *id > active_strip.id())
-                    .min_by_key(|(id, _, _)| *id)
-                    .map(|(_, _, entity)| *entity)
-            }),
-        (Direction::West, Some(active_order)) => candidates
-            .iter()
-            .filter_map(|(_, order, entity)| {
-                let order = (*order)?;
-                (order < active_order).then_some((order, *entity))
-            })
+            .map(|(_, entity)| entity),
+        Direction::West => candidates
+            .filter(|(order, _)| *order < active_order)
             .max_by_key(|(order, _)| *order)
-            .map(|(_, entity)| entity)
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .filter(|(id, order, _)| order.is_none() && *id < active_strip.id())
-                    .max_by_key(|(id, _, _)| *id)
-                    .map(|(_, _, entity)| *entity)
-            }),
-        (Direction::East, None) => candidates
-            .into_iter()
-            .filter(|(id, _, _)| *id > active_strip.id())
-            .min_by_key(|(id, _, _)| *id)
-            .map(|(_, _, entity)| entity),
-        (Direction::West, None) => candidates
-            .into_iter()
-            .filter(|(id, _, _)| *id < active_strip.id())
-            .max_by_key(|(id, _, _)| *id)
-            .map(|(_, _, entity)| entity),
+            .map(|(_, entity)| entity),
         _ => None,
     }
 }
@@ -302,7 +282,7 @@ fn command_move_focus(
         && matches!(direction, Direction::West)
         && let Some(strip) = workspaces
             .iter()
-            .find_map(|(strip, _, _, _)| (strip.id() == fullscreen.previous_strip).then_some(strip))
+            .find_map(|(strip, _, _, _, _)| (strip.id() == fullscreen.previous_strip).then_some(strip))
         && let Ok(column) = strip.last()
         && let Some(entity) = column.top()
     {
