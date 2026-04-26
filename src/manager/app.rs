@@ -4,7 +4,7 @@ use accessibility_sys::{
 use bevy::ecs::component::Component;
 use core::ptr::NonNull;
 use derive_more::{DerefMut, with_trait::Deref};
-use objc2_core_foundation::{CFRetained, CFString, kCFRunLoopCommonModes};
+use objc2_core_foundation::{CFRetained, CFString, kCFBooleanFalse, kCFRunLoopCommonModes};
 use std::ffi::c_void;
 use std::pin::Pin;
 use std::ptr::null_mut;
@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 use stdext::function_name;
 use tracing::{debug, error};
 
-use super::skylight::_SLPSGetFrontProcess;
+use super::skylight::{AXUIElementSetAttributeValue, _SLPSGetFrontProcess};
 use super::{ProcessApi, Window, WindowOS, ax_window_id};
 use crate::errors::{Error, Result};
 use crate::events::{Event, EventSender};
@@ -49,6 +49,24 @@ pub static AX_WINDOW_NOTIFICATIONS: LazyLock<Vec<&str>> = LazyLock::new(|| {
         accessibility_sys::kAXWindowDeminiaturizedNotification,
     ]
 });
+
+/// Tells the target application not to run its own UI animation when AX
+/// setPosition/setSize is called. The attribute is private (not exposed by
+/// `accessibility_sys`) but well-known — yabai, Aerospace, and Amethyst all
+/// flip it for the same reason. Errors are intentionally swallowed: many apps
+/// don't define the attribute at all, which surfaces as a non-success status.
+fn disable_enhanced_user_interface(element: &CFRetained<AXUIWrapper>) {
+    let Some(false_value) = (unsafe { kCFBooleanFalse }) else {
+        return;
+    };
+    let attribute = CFString::from_static_str("AXEnhancedUserInterface");
+    let status = unsafe {
+        AXUIElementSetAttributeValue(element.as_ptr(), attribute.as_ref(), false_value)
+    };
+    if status != kAXErrorSuccess {
+        debug!("AXEnhancedUserInterface set returned status {status}");
+    }
+}
 
 pub trait ApplicationApi: Send + Sync {
     /// Returns the process ID of the application.
@@ -246,6 +264,14 @@ impl ApplicationApi for ApplicationOS {
     ///
     /// `Ok(bool)` where `true` means all observers were successfully registered and `retry` list is empty, otherwise `Err(Error)`.
     fn observe(&mut self) -> Result<bool> {
+        // Disable AXEnhancedUserInterface so the app responds to AX
+        // setPosition/setSize synchronously instead of running its own
+        // animation/relayout pass. Without this, apps like Chrome and the
+        // JetBrains family lag behind paneru's scroll animation, which leaves
+        // a visible gap between a moving window and its neighbours. The call
+        // is idempotent and harmless on apps that don't honour the attribute.
+        disable_enhanced_user_interface(&self.element);
+
         self.handler
             .add_observer(&self.element, &AX_NOTIFICATIONS, ObserverType::Application)
             .map(|retry| retry.is_empty())
