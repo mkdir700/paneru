@@ -2,7 +2,13 @@ use bevy::ecs::message::Message;
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFRetained, CGPoint};
 use objc2_core_graphics::CGDirectDisplayID;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender, channel};
+
+/// Set to `true` by the SIGINT/SIGTERM handler so the main loop can shut down
+/// gracefully (running `cleanup_on_exit`) instead of being terminated by the
+/// default signal action.
+pub static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 use crate::commands::Command;
 use crate::config::Config;

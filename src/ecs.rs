@@ -36,7 +36,7 @@ pub mod layout;
 mod mouse;
 pub mod params;
 mod scroll;
-mod systems;
+pub(crate) mod systems;
 mod triggers;
 mod workspace;
 

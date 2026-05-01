@@ -3,7 +3,7 @@ use bevy::ecs::entity::{Entity, EntityHashSet};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::{Has, With, Without};
-use bevy::ecs::system::{Commands, Query, Res, ResMut, Single};
+use bevy::ecs::system::{Commands, NonSendMut, Query, Res, ResMut, Single};
 use bevy::math::IRect;
 use tracing::{Level, instrument};
 use tracing::{debug, info};
@@ -11,6 +11,7 @@ use tracing::{debug, info};
 use crate::config::Config;
 use crate::ecs::layout::{Column, LayoutStrip, StackItem};
 use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Windows};
+use crate::ecs::systems::perform_exit_cleanup;
 use crate::ecs::{
     ActiveDisplayMarker, ActiveWorkspaceMarker, FocusFollowsMouse, FocusedMarker, FullWidthMarker,
     NativeFullscreenMarker, SelectedVirtualMarker, SendMessageTrigger, Unmanaged, WMEventTrigger,
@@ -18,6 +19,7 @@ use crate::ecs::{
 };
 use crate::events::Event;
 use crate::manager::{Application, Display, Origin, Size, Window, WindowManager, origin_to};
+use crate::overlay::OverlayManager;
 
 type WorkspaceNavItem<'a> = (
     &'a LayoutStrip,
@@ -934,6 +936,9 @@ pub fn stack_windows_handler(
 pub fn command_quit_handler(
     mut messages: MessageReader<Event>,
     window_manager: Res<WindowManager>,
+    mut all_windows: Query<&mut Window>,
+    displays: Query<&Display>,
+    overlay_mgr: Option<NonSendMut<OverlayManager>>,
 ) {
     if messages.read().any(|event| {
         matches!(
@@ -943,6 +948,13 @@ pub fn command_quit_handler(
             }
         )
     }) {
+        info!("Quit command received, cleaning up before exit");
+        perform_exit_cleanup(
+            &mut all_windows,
+            &displays,
+            &window_manager,
+            overlay_mgr.map(NonSendMut::into_inner),
+        );
         _ = window_manager.quit();
     }
 }

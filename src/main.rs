@@ -20,13 +20,36 @@ mod tests;
 
 embed_plist::embed_info_plist!("../assets/Info.plist");
 
-use events::EventSender;
+use events::{EventSender, SHUTDOWN_REQUESTED};
 
 use errors::Result;
 use platform::service;
 use reader::CommandReader;
 
 use crate::ecs::setup_bevy_app;
+
+extern "C" fn handle_shutdown_signal(_: libc::c_int) {
+    SHUTDOWN_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn install_shutdown_handlers() {
+    // SAFETY: setting POSIX signal handlers is sound; the handler only stores
+    // an `AtomicBool`, which is async-signal-safe.
+    unsafe {
+        libc::signal(
+            libc::SIGINT,
+            handle_shutdown_signal as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGTERM,
+            handle_shutdown_signal as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGHUP,
+            handle_shutdown_signal as libc::sighandler_t,
+        );
+    }
+}
 
 /// `Paneru` is the main command-line interface structure for the window manager.
 /// It defines the available subcommands for controlling the Paneru daemon.
@@ -104,6 +127,7 @@ fn main() -> Result<()> {
 
     match subcmd {
         SubCmd::Launch => {
+            install_shutdown_handlers();
             let (sender, receiver) = EventSender::new();
             CommandReader::new(sender.clone()).start();
             match setup_bevy_app(sender, receiver) {
