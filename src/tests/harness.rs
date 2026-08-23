@@ -47,6 +47,7 @@ impl TestHarness {
             windows: spawner,
             workspaces: vec![TEST_WORKSPACE_ID],
             fullscreen_workspaces: vec![],
+            unordered_windows: Arc::default(),
         };
         self.app
             .world_mut()

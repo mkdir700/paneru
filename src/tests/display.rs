@@ -110,6 +110,7 @@ fn test_multi_workspace_orphaning() {
         windows: spawner,
         workspaces: vec![TEST_WORKSPACE_ID, TEST_WORKSPACE_ID + 1],
         fullscreen_workspaces: vec![],
+        unordered_windows: Arc::default(),
     };
 
     TestHarness::new()

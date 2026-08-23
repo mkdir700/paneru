@@ -50,6 +50,7 @@ mod workspace;
 /// * `app` - The Bevy application to register the systems with.
 #[allow(clippy::too_many_lines)]
 pub fn register_systems(app: &mut bevy::app::App) {
+    const CLOSED_WINDOW_CHECK_FREQ_MS: u64 = 100;
     const DISPLAY_CHANGE_CHECK_FREQ_MS: u64 = 1000;
     const REFRESH_WINDOW_CHECK_FREQ_MS: u64 = 1000;
     app.add_systems(
@@ -84,6 +85,11 @@ pub fn register_systems(app: &mut bevy::app::App) {
             workspace::refresh_workspace_window_sizes.run_if(on_timer(Duration::from_millis(
                 REFRESH_WINDOW_CHECK_FREQ_MS,
             ))),
+            workspace::cleanup_unordered_windows
+                .run_if(not(resource_exists::<Initializing>))
+                .run_if(on_timer(Duration::from_millis(
+                    CLOSED_WINDOW_CHECK_FREQ_MS,
+                ))),
             systems::displays_rearranged,
             systems::reposition_dragged_window,
             workspace::detect_moved_windows.run_if(not(resource_exists::<Initializing>)),

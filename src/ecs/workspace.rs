@@ -9,7 +9,7 @@ use bevy::ecs::system::{Commands, Local, Populated, Query, Res, Single};
 use std::collections::HashSet;
 use tracing::{Level, debug, error, instrument, warn};
 
-use super::{ActiveDisplayMarker, SpawnWindowTrigger, WMEventTrigger};
+use super::{ActiveDisplayMarker, FreshMarker, SpawnWindowTrigger, WMEventTrigger};
 use crate::commands::{Direction, MoveFocus, Operation, filter_window_operations};
 use crate::ecs::layout::LayoutStrip;
 use crate::ecs::params::{ActiveDisplay, Windows};
@@ -478,6 +478,21 @@ pub(crate) fn refresh_workspace_window_sizes(
 
     if let Ok(mut cmds) = commands.get_entity(strip_entity) {
         cmds.try_remove::<RefreshWindowSizes>();
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn cleanup_unordered_windows(
+    windows: Query<&Window, (Without<Unmanaged>, Without<FreshMarker>)>,
+    window_manager: Res<WindowManager>,
+    mut commands: Commands,
+) {
+    for window in &windows {
+        let window_id = window.id();
+        if window_manager.window_is_unordered(window_id) {
+            debug!("Window {window_id} is unordered; removing it.");
+            commands.trigger(WMEventTrigger(Event::WindowDestroyed { window_id }));
+        }
     }
 }
 

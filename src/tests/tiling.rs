@@ -191,6 +191,36 @@ fn test_startup_windows() {
 }
 
 #[test]
+fn test_unordered_wechat_window_releases_its_layout_space() {
+    let mut harness = TestHarness::new();
+    let mock_app = setup_process(harness.app.world_mut());
+    let unordered_windows = Arc::default();
+    let unordered = Arc::clone(&unordered_windows);
+    let windows = window_spawner(3, harness.internal_queue.clone(), mock_app);
+    let wm = MockWindowManager {
+        windows,
+        workspaces: vec![TEST_WORKSPACE_ID],
+        fullscreen_workspaces: vec![],
+        unordered_windows,
+    };
+
+    let mut harness = harness.with_wm(wm);
+    harness.run(vec![Event::MenuOpened { window_id: 0 }]);
+
+    unordered.write().unwrap().insert(1);
+    harness.app.update();
+    harness.app.update();
+
+    let world = harness.app.world_mut();
+    let mut windows = world.query::<&Window>();
+    assert!(
+        windows.iter(world).all(|window| window.id() != 1),
+        "unordered WeChat window should be removed within 200 ms"
+    );
+    assert_window_at!(world, 0, TEST_WINDOW_WIDTH, TEST_MENUBAR_HEIGHT);
+}
+
+#[test]
 fn test_window_resize_grow_and_shrink_cycle() {
     let commands = vec![
         Event::MenuOpened { window_id: 0 },

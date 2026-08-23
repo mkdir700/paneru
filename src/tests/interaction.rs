@@ -392,6 +392,7 @@ fn test_startup_fullscreen_workspace_can_be_focused_from_right_edge() {
         windows,
         workspaces: vec![TEST_WORKSPACE_ID, TEST_WORKSPACE_ID + 1],
         fullscreen_workspaces: vec![TEST_WORKSPACE_ID + 1],
+        unordered_windows: std::sync::Arc::default(),
     };
 
     let mut harness = harness.with_wm(wm);
@@ -439,6 +440,7 @@ fn test_startup_regular_workspace_can_be_focused_from_right_edge() {
         windows,
         workspaces: vec![TEST_WORKSPACE_ID, TEST_WORKSPACE_ID + 1],
         fullscreen_workspaces: vec![],
+        unordered_windows: std::sync::Arc::default(),
     };
 
     let mut harness = harness.with_wm(wm);

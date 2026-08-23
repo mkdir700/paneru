@@ -33,9 +33,10 @@ use skylight::{
     SLSCopyAssociatedWindows, SLSCopyManagedDisplaySpaces, SLSCopyWindowsWithOptionsAndTags,
     SLSFindWindowAndOwner, SLSGetConnectionIDForPSN, SLSGetCurrentCursorLocation,
     SLSGetDisplayMenubarHeight, SLSGetSpaceManagementMode, SLSMainConnectionID,
-    SLSManagedDisplayGetCurrentSpace, SLSSpaceGetType, SLSWindowIteratorAdvance,
-    SLSWindowIteratorGetAttributes, SLSWindowIteratorGetParentID, SLSWindowIteratorGetTags,
-    SLSWindowIteratorGetWindowID, SLSWindowQueryResultCopyWindows, SLSWindowQueryWindows,
+    SLSManagedDisplayGetCurrentSpace, SLSSpaceGetType, SLSWindowIsOrderedIn,
+    SLSWindowIteratorAdvance, SLSWindowIteratorGetAttributes, SLSWindowIteratorGetParentID,
+    SLSWindowIteratorGetTags, SLSWindowIteratorGetWindowID, SLSWindowQueryResultCopyWindows,
+    SLSWindowQueryWindows,
 };
 pub use windows::{Window, WindowApi, WindowOS, WindowPadding, ax_window_id};
 
@@ -158,6 +159,8 @@ pub trait WindowManagerApi: Send + Sync {
     ///
     /// `Ok(Vec<WinID>)` containing the list of window IDs, otherwise `Err(Error)`.
     fn windows_in_workspace(&self, space_id: WorkspaceId) -> Result<Vec<WinID>>;
+    /// Returns `true` when a window is no longer ordered into the window list.
+    fn window_is_unordered(&self, window_id: WinID) -> bool;
     /// Sends an `Event::Exit` to the event loop, signaling the application to quit.
     ///
     /// # Returns
@@ -490,6 +493,14 @@ impl WindowManagerApi for WindowManagerOS {
     /// Returns a list of windows in a given workspace.
     fn windows_in_workspace(&self, space_id: WorkspaceId) -> Result<Vec<WinID>> {
         space_window_list_for_connection(self.main_cid, &[space_id], None, true)
+    }
+
+    fn window_is_unordered(&self, window_id: WinID) -> bool {
+        let mut ordered_in = 0;
+        let ordered_status =
+            unsafe { SLSWindowIsOrderedIn(self.main_cid, window_id, &mut ordered_in) };
+
+        ordered_status == 0 && ordered_in == 0
     }
 
     fn quit(&self) -> Result<()> {

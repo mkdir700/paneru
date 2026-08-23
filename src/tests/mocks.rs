@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
@@ -180,6 +181,7 @@ pub(crate) struct MockWindowManager {
     pub(crate) windows: TestWindowSpawner,
     pub(crate) workspaces: Vec<WorkspaceId>,
     pub(crate) fullscreen_workspaces: Vec<WorkspaceId>,
+    pub(crate) unordered_windows: Arc<RwLock<HashSet<WinID>>>,
 }
 
 impl std::fmt::Debug for MockWindowManager {
@@ -284,6 +286,10 @@ impl WindowManagerApi for MockWindowManager {
             .map(|window| window.id())
             .collect();
         Ok(ids)
+    }
+
+    fn window_is_unordered(&self, window_id: WinID) -> bool {
+        self.unordered_windows.force_read().contains(&window_id)
     }
 
     /// Always returns `Ok(())`.
@@ -571,6 +577,10 @@ impl WindowManagerApi for TwoDisplayMock {
             .iter()
             .map(|w| w.id())
             .collect())
+    }
+
+    fn window_is_unordered(&self, _window_id: WinID) -> bool {
+        false
     }
 
     fn quit(&self) -> Result<()> {
